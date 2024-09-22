@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2024 ilbie,two6ean
+Copyright (c) 2024 ilbie, two6ean
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
