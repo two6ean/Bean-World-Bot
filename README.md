@@ -23,3 +23,6 @@ We've implemented management commands and systems to make managing your server a
 
 ### Other features and commands
 There are other miscellaneous commands and systems in place.
+
+## Support and collaboration
+This Discord bot was created with the help and collaboration of ilibe.
