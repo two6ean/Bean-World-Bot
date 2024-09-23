@@ -59,12 +59,12 @@ USER_IDS=user-id-list
 python bot.py
 ```
 
-##🔗 우리의 디스코드 커뮤니티에 참여하세요
+## 🔗 우리의 디스코드 커뮤니티에 참여하세요
 - [디스코드 링크](https://discord.gg/UEKpPZ9hhr)
 
-##🤝 기여자 및 지원
+## 🤝 기여자 및 지원
 - [Twobean](https://github.com/two6ean)
 - [Ilbie](https://github.com/Ilbie)
 
-##☕ Buy me a coffee
+## ☕ Buy me a coffee
 [Buy me a coffee](https://buymeacoffee.com/ilbie)
