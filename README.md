@@ -36,16 +36,21 @@
 
 # 저장소를 클론합니다:
 ```sh
-git clone https://github.com/yourusername/bean-world-bot.git
+git clone https://github.com/two6ean/Bean-World-Bot.git
 ```
 
 # 봇 디렉토리로 이동합니다:
 ```sh
-cd bean-world-bot
+cd Bean-World-Bot
 ```
 # 필요한 패키지를 설치합니다:
 ```sh
 pip install -r requirements.txt
+```
+# 리눅스 패키지를 설치합니다:
+```sh
+sudo apt install ffmpeg
+sudo apt install libopus0
 ```
 # .env 파일을 설정해 주세요:
 ```sh
