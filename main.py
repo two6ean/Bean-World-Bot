@@ -18,6 +18,28 @@ import yt_dlp as youtube_dl
 import nacl
 import sys
 
+from src.config.config import TOKEN, ANNOUNCEMENT_CHANNEL_ID, ADMIN_ROLE_ID, USER_IDS, KST
+from src.database.db import get_cursor, get_connection
+from src.config.ytdl import ytdl_format_options, ffmpeg_options
+from src.config.hangang_api import Hangang
+from src.database.coin_management import get_user_coins, update_user_coins
+from src.database.game_stats import update_rps_stats, update_odd_even_stats, update_slot_machine_stats, update_blackjack_stats
+from src.database.daily_tasks import update_daily_tasks
+from src.config.coin_setup import format_coins, ensure_check_in_net_coins_column
+from src.config.time_utils import get_korean_time
+from src.command.hangang import hangang
+from src.command.sponsor import sponsor
+from src.command.ping import ping
+from src.command.announcement import announcement
+from src.command.banned_word import banned_word
+from src.command.timeout import timeout
+from src.command.ban import ban
+
+c = get_cursor()
+conn = get_connection()
+
+ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  # 멤버 관련 이벤트를 처리하기 위해 활성화
@@ -26,398 +48,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 youtube_dl.utils.bug_reports_message = lambda: ''
-
-from src.config.config import TOKEN, ANNOUNCEMENT_CHANNEL_ID, ADMIN_ROLE_ID, USER_IDS, KST
-from src.database.db import get_cursor, get_connection
-from src.config.ytdl import ytdl_format_options, ffmpeg_options
-from src.config.hangang import Hangang
-
-c = get_cursor()
-conn = get_connection()
-
-ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
-
-# 한강 API 데이터를 가져오기 위한 인스턴스 생성
-hangang_api = Hangang()
-
-# 한강 물 온도 정보를 가져옴
-hangang_info = hangang_api.get_info()
-
-def get_korean_time():
-    return datetime.now(KST)
-
-# 코인 포맷 함수 추가
-def format_coins(coins: int) -> str:
-    parts = []
-    if coins >= 100000000:
-        parts.append(f"{coins // 100000000}억")
-        coins %= 100000000
-    if coins >= 10000:
-        parts.append(f"{coins // 10000}만")
-        coins %= 10000
-    if coins > 0 or not parts:
-        parts.append(f"{coins}")
-
-    return ' '.join(parts)
-
-def get_user_coins(user_id: int) -> int:
-    c.execute("SELECT coins FROM user_coins WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    return row[0] if row else 0
-
-def update_user_coins(user_id: int, amount: int):
-    c.execute("SELECT coins FROM user_coins WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    if row is None:
-        if amount < 0:
-            amount = 0
-        c.execute("INSERT INTO user_coins (user_id, coins) VALUES (?, ?)", (user_id, amount))
-    else:
-        coins = row[0]
-        new_amount = coins + amount
-        if new_amount < 0:
-            new_amount = 0
-        c.execute("UPDATE user_coins SET coins = ? WHERE user_id = ?", (new_amount, user_id))
-    conn.commit()
-
-def ensure_check_in_net_coins_column():
-    c.execute("PRAGMA table_info(game_stats)")
-    columns = [info[1] for info in c.fetchall()]
-    if 'check_in_net_coins' not in columns:
-        c.execute("ALTER TABLE game_stats ADD COLUMN check_in_net_coins INTEGER DEFAULT 0")
-    conn.commit()
-
-def ensure_user_stats_exist(user_id):
-    c.execute("SELECT 1 FROM game_stats WHERE user_id = ?", (user_id,))
-    if c.fetchone() is None:
-        c.execute("INSERT INTO game_stats (user_id) VALUES (?)", (user_id,))
-        conn.commit()
-
-def update_rps_stats(user_id, result, bet):
-    ensure_user_stats_exist(user_id)
-    net_coins = 0
-    if result == "승리":
-        c.execute("UPDATE game_stats SET rps_wins = rps_wins + 1, rps_net_coins = rps_net_coins + ? WHERE user_id = ?", (net_coins, user_id))
-    elif result == "패배":
-        net_coins = -bet
-        c.execute("UPDATE game_stats SET rps_losses = rps_losses + 1, rps_net_coins = rps_net_coins - ? WHERE user_id = ?", (bet, user_id))
-    else:
-        net_coins = 0
-        c.execute("UPDATE game_stats SET rps_ties = rps_ties + 1 WHERE user_id = ?", (user_id,))
-    conn.commit()
-
-def update_odd_even_stats(user_id, result, bet):
-    ensure_user_stats_exist(user_id)
-    if result == "승리":
-        net_coins = int(bet * 0.5)  # 승리 시 50% 추가
-        c.execute("UPDATE game_stats SET odd_even_wins = odd_even_wins + 1, odd_even_net_coins = odd_even_net_coins + ? WHERE user_id = ?", (net_coins, user_id))
-    elif result == "패배":
-        c.execute("UPDATE game_stats SET odd_even_losses = odd_even_losses + 1, odd_even_net_coins = odd_even_net_coins - ? WHERE user_id = ?", (bet, user_id))
-    conn.commit()
-
-def update_slot_machine_stats(user_id, result, payout, bet):
-    ensure_user_stats_exist(user_id)
-    if result == "승리":
-        net_coins = payout - bet
-        c.execute("UPDATE game_stats SET slot_machine_wins = slot_machine_wins + 1, slot_machine_net_coins = slot_machine_net_coins + ? WHERE user_id = ?", (net_coins, user_id))
-    else:
-        c.execute("UPDATE game_stats SET slot_machine_losses = slot_machine_losses + 1, slot_machine_net_coins = slot_machine_net_coins - ? WHERE user_id = ?", (bet, user_id))
-    conn.commit()
-
-def update_blackjack_stats(user_id, result, net_coins):
-    c.execute("SELECT blackjack_wins, blackjack_losses, blackjack_ties, blackjack_net_coins FROM game_stats WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    
-    if row is None:
-        wins, losses, ties = 0, 0, 0
-        if result == 'win':
-            wins = 1
-        elif result == 'loss':
-            losses = 1
-        else:
-            ties = 1
-        c.execute("INSERT INTO game_stats (user_id, blackjack_wins, blackjack_losses, blackjack_ties, blackjack_net_coins) VALUES (?, ?, ?, ?, ?)", (user_id, wins, losses, ties, net_coins))
-    else:
-        wins, losses, ties, current_net_coins = row
-        if result == 'win':
-            wins += 1
-        elif result == 'loss':
-            losses += 1
-        else:
-            ties += 1
-        c.execute("UPDATE game_stats SET blackjack_wins = ?, blackjack_losses = ?, blackjack_ties = ?, blackjack_net_coins = ? WHERE user_id = ?", (wins, losses, ties, current_net_coins + net_coins, user_id))
-    conn.commit()
-
-def update_daily_tasks(user_id, task_type):
-    current_time = get_korean_time()
-    ensure_user_stats_exist(user_id)
-
-    c.execute("SELECT last_reset, work_count, problem_count FROM daily_tasks WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    if row:
-        last_reset_time = datetime.fromisoformat(row[0]).astimezone(KST)
-        if (current_time - last_reset_time).total_seconds() >= 86400:
-            c.execute("UPDATE daily_tasks SET last_reset = ?, work_count = 0, problem_count = 0 WHERE user_id = ?", (current_time.isoformat(), user_id))
-            conn.commit()
-
-    if task_type == "노가다":
-        c.execute("UPDATE daily_tasks SET work_count = work_count + 1 WHERE user_id = ?", (user_id,))
-        c.execute("UPDATE game_stats SET work_count = work_count + 1 WHERE user_id = ?", (user_id,))
-    elif task_type == "문제풀기":
-        c.execute("UPDATE daily_tasks SET problem_count = problem_count + 1 WHERE user_id = ?", (user_id,))
-        c.execute("UPDATE game_stats SET problem_count = problem_count + 1 WHERE user_id = ?", (user_id,))
-    
-    conn.commit()
-
-
-@bot.tree.command(name="한강물온도", description="현재 한강 물 온도를 표시합니다. (음악 듣는 중에 사용해 보세요!)")
-@app_commands.guild_only()
-async def hangang_temp_command(interaction: discord.Interaction):
-    try:
-        hangang = hangang_api
-        info = hangang_info
-
-        if info['status'] == "ok":
-            embed = discord.Embed(title="한강물 온도", color=discord.Color.blue())
-            embed.add_field(name="한강", value=f"온도: {info['temp']} °C\n마지막 업데이트: {info['last_update']}\nPH: {info['ph']}", inline=False)
-            await interaction.response.send_message(embed=embed)
-        else:
-            await interaction.response.send_message(info['msg'], ephemeral=True)
-    except Exception as e:
-        print(f"명령어 처리 중 오류 발생: {e}")
-        await interaction.response.send_message("명령어를 처리하는 중 오류가 발생했습니다.", ephemeral=True)
-
-# 핑 명령어
-@bot.tree.command(name="핑", description="서버의 핑을 확인합니다.")
-@app_commands.guild_only()
-async def ping_command(interaction: discord.Interaction):
-    try:
-        latency = round(bot.latency * 1000)
-        start_time = datetime.utcnow()
-        await interaction.response.send_message("핑을 확인하는 중...", ephemeral=True)
-        end_time = datetime.utcnow()
-        response_time = (end_time - start_time).total_seconds() * 1000
-
-        embed = discord.Embed(
-            title="🏓 퐁!",
-            description=(
-                f"현재 핑: {latency}ms\n"
-                f"명령어 응답 시간: {response_time:.2f}ms\n"
-                f"레이턴시: {latency + response_time:.2f}ms"
-            ),
-            color=discord.Color.blue()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"오류 발생: {str(e)}", ephemeral=True)
-
-# 후원 명령어
-class DonateView(discord.ui.View):
-    def __init__(self):
-        super().__init__()
-        self.add_item(discord.ui.Button(label="💻개발자 후원", url="https://buymeacoffee.com/ilbie"))
-
-@bot.tree.command(name="후원", description="후원 정보를 제공합니다.")
-@app_commands.guild_only()
-async def donate_command(interaction: discord.Interaction):
-    try:
-        embed = discord.Embed(
-            title="후원 안내",
-            description=(
-                "안녕하세요! 봇 개발 및 서버 운영을 위해 후원을 받고 있습니다.\n"
-                "후원해주시면 큰 도움이 됩니다!\n\n"
-                "**후원 방법:**\n\n"
-                "아래 버튼을 통해 후원해주시면 감사하겠습니다!\n\n"
-                "감사합니다! ;)"
-            ),
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed, view=DonateView(), ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
-
-
-#공지
-@bot.tree.command(name="공지", description="공지사항을 전송합니다.")
-@app_commands.describe(메시지="전송할 공지 내용을 입력하세요.", 역할들="멘션할 역할을 공백으로 구분하여 입력하세요.")
-@app_commands.guild_only()
-async def announce_command(interaction: discord.Interaction, 메시지: str, 역할들: str = ""):
-    try:
-        channel = bot.get_channel(ANNOUNCEMENT_CHANNEL_ID)
-        if channel is None:
-            await interaction.response.send_message("공지 채널을 찾을 수 없습니다. 채널 ID를 확인하세요.", ephemeral=True)
-            return
-        
-        role_mentions = []
-        if 역할들:
-            role_ids = 역할들.split()
-            guild = interaction.guild
-            for role_id in role_ids:
-                role_id = role_id.strip('<@&>')
-                if role_id.isdigit():
-                    role = guild.get_role(int(role_id))
-                    if role:
-                        role_mentions.append(f"||{role.mention}||")
-                    else:
-                        await interaction.response.send_message(f"역할 ID '{role_id}'을(를) 찾을 수 없습니다.", ephemeral=True)
-                        return
-        
-        role_mentions_text = ' '.join(role_mentions) if role_mentions else ""
-        
-        embed = discord.Embed(
-            title="📢 공지사항",
-            description=메시지,
-            color=discord.Color.gold()
-        )
-        embed.set_footer(text=f"작성자: {interaction.user.name}", icon_url=interaction.user.avatar.url)
-        
-        await channel.send(content=role_mentions_text, embed=embed)
-        await interaction.response.send_message("공지가 전송되었습니다.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
-
-# 금지 단어 관리 명령어
-@bot.tree.command(name="금지단어", description="금지된 단어를 관리합니다.")
-@app_commands.choices(옵션=[
-    app_commands.Choice(name="추가", value="추가"),
-    app_commands.Choice(name="삭제", value="삭제"),
-    app_commands.Choice(name="리스트", value="리스트")
-])
-@app_commands.describe(옵션="동작을 선택하세요 (추가, 삭제, 리스트).", 단어="금지할 단어를 입력하세요.")
-@app_commands.guild_only()
-async def ban_word_command(interaction: discord.Interaction, 옵션: app_commands.Choice[str], 단어: str = None):
-    try:
-        if ADMIN_ROLE_ID not in [role.id for role in interaction.user.roles]:
-            await interaction.response.send_message("이 명령어를 사용할 권한이 없습니다.", ephemeral=True)
-            return
-        
-        if 옵션.value == "추가" and 단어:
-            c.execute("INSERT INTO banned_words (word) VALUES (?)", (단어,))
-            conn.commit()
-            await interaction.response.send_message(f"금지된 단어 '{단어}'가 추가되었습니다.", ephemeral=True)
-        elif 옵션.value == "삭제" and 단어:
-            c.execute("SELECT word FROM banned_words WHERE word = ?", (단어,))
-            if c.fetchone() is None:
-                await interaction.response.send_message(f"금지된 단어 '{단어}'가 데이터베이스에 없습니다.", ephemeral=True)
-            else:
-                c.execute("DELETE FROM banned_words WHERE word = ?", (단어,))
-                conn.commit()
-                await interaction.response.send_message(f"금지된 단어 '{단어}'가 삭제되었습니다.", ephemeral=True)
-        elif 옵션.value == "리스트":
-            c.execute("SELECT word FROM banned_words")
-            banned_words = [row[0] for row in c.fetchall()]
-            if banned_words:
-                banned_words_text = " | ".join(banned_words)
-                embed = discord.Embed(title="금지된 단어 목록", description=banned_words_text, color=discord.Color.red())
-            else:
-                embed = discord.Embed(title="금지된 단어 목록", description="등록된 금지된 단어가 없습니다.", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        else:
-            await interaction.response.send_message("잘못된 명령어 사용입니다. 사용법: /밴단어 추가 <단어>, /밴단어 삭제 <단어>, /밴단어 리스트", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
-
-# 타임아웃 명령어
-@bot.tree.command(name="타임아웃", description="사용자를 타임아웃합니다.")
-@app_commands.describe(사용자="타임아웃할 사용자를 선택하세요.", 기간="타임아웃 기간을 입력하세요 (예: 1d, 1h, 10m).", 이유="타임아웃 사유를 입력하세요.")
-@app_commands.guild_only()
-async def timeout_command(interaction: discord.Interaction, 사용자: discord.Member, 기간: str, 이유: str = None):
-    try:
-        if ADMIN_ROLE_ID not in [role.id for role in interaction.user.roles]:
-            await interaction.response.send_message("이 명령어를 사용할 권한이 없습니다.", ephemeral=True)
-            return
-        
-        duration_map = {'d': '일', 'h': '시간', 'm': '분'}
-        unit = 기간[-1]
-
-        if unit not in duration_map:
-            await interaction.response.send_message("기간 형식이 잘못되었습니다. 'd', 'h', 'm' 중 하나를 사용하세요.", ephemeral=True)
-            return
-
-        try:
-            value = int(기간[:-1])
-        except ValueError:
-            await interaction.response.send_message("기간의 숫자 부분이 잘못되었습니다. 올바른 숫자를 입력하세요.", ephemeral=True)
-            return
-
-        if unit == 'd':
-            delta = timedelta(days=value)
-        elif unit == 'h':
-            delta = timedelta(hours=value)
-        elif unit == 'm':
-            delta = timedelta(minutes=value)
-
-        timeout_end = discord.utils.utcnow() + delta
-
-        try:
-            await 사용자.edit(timed_out_until=timeout_end)
-        except discord.Forbidden:
-            await interaction.response.send_message("타임아웃할 권한이 없습니다.", ephemeral=True)
-            return
-        except discord.HTTPException as e:
-            await interaction.response.send_message(f"타임아웃 처리 중 오류가 발생했습니다", ephemeral=True)
-            return
-
-        try:
-            await 사용자.send(
-                embed=discord.Embed(
-                    title="타임아웃 알림",
-                    description=(
-                        f"서버에서 {value}{duration_map[unit]}동안 타임아웃 되었습니다."
-                        + (f"\n이유: {이유}" if 이유 else "")
-                    ),
-                    color=discord.Color.red()
-                )
-            )
-        except discord.Forbidden:
-            print(f"{사용자}에게 DM을 보낼 수 없습니다.")
-
-        embed = discord.Embed(
-            title="타임아웃 알림",
-            description=(
-                f"{사용자.mention}님이 {value}{duration_map[unit]}동안 타임아웃 되었습니다."
-                + (f"\n이유: {이유}" if 이유 else "")
-            ),
-            color=discord.Color.red()
-        )
-        await interaction.channel.send(embed=embed)
-        await interaction.response.send_message("타임아웃이 성공적으로 적용되었습니다.", ephemeral=True)
-    
-    except Exception as e:
-        await interaction.response.send_message(f"예기치 못한 오류가 발생했습니다: {str(e)}", ephemeral=True)
-
-# 밴 명령어
-@bot.tree.command(name="밴", description="사용자를 차단합니다.")
-@app_commands.describe(사용자="차단할 사용자를 선택하세요.", 이유="차단 사유를 입력하세요.")
-@app_commands.guild_only()
-async def ban_command(interaction: discord.Interaction, 사용자: discord.Member, 이유: str = None):
-    try:
-        if ADMIN_ROLE_ID not in [role.id for role in interaction.user.roles]:
-            await interaction.response.send_message("이 명령어를 사용할 권한이 없습니다.", ephemeral=True)
-            return
-
-        try:
-            await 사용자.ban(reason=이유)
-        except discord.Forbidden:
-            await interaction.response.send_message("사용자를 차단할 권한이 없습니다.", ephemeral=True)
-            return
-        except discord.HTTPException as e:
-            await interaction.response.send_message(f"사용자 차단 중 오류가 발생했습니다: {str(e)}", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title="사용자 차단 알림",
-            description=(
-                f"{사용자.mention}님이 서버에서 차단되었습니다."
-                + (f"\n이유: {이유}" if 이유 else "")
-            ),
-            color=discord.Color.red()
-        )
-        await interaction.channel.send(embed=embed)
-        await interaction.response.send_message("사용자가 성공적으로 차단되었습니다.", ephemeral=True)
-    
-    except Exception as e:
-        await interaction.response.send_message(f"예기치 못한 오류가 발생했습니다: {str(e)}", ephemeral=True)
 
 # 메시지 검사 및 타임아웃 처리
 @bot.event
@@ -1494,8 +1124,8 @@ async def rps_command(interaction: discord.Interaction, 배팅: int, 선택: app
             net_coins = 배팅  # 무승부 시 배팅 금액 반환
             update_user_coins(user_id, 배팅)  # 반환 처리
         elif (user_choice == "가위" and bot_choice == "보") or \
-             (user_choice == "바위" and bot_choice == "가위") or \
-             (user_choice == "보" and bot_choice == "바위"):
+            (user_choice == "바위" and bot_choice == "가위") or \
+            (user_choice == "보" and bot_choice == "바위"):
             result = "승리"
             net_coins = int(배팅 * 1.5)  # 승리 시 배팅 금액의 50% 추가
             update_user_coins(user_id, net_coins)
@@ -2365,19 +1995,48 @@ print(nacl.__version__)
 # 봇 준비
 @bot.event
 async def on_ready():
-    ensure_check_in_net_coins_column()
-    updates_file = 'updates.json'
-    if not validate_updates_json(updates_file):
-        print(f"업데이트 JSON 파일 ({updates_file})의 무결성 검사가 실패했습니다. 파일을 확인하세요.")
-        await bot.close()
-        return
+    try:
+        #명령어 실행
+        hangang(bot)
+        ping(bot)
+        sponsor(bot)
+        announcement(bot)
+        banned_word(bot)
+        timeout(bot)
+        ban(bot)
 
-    await bot.tree.sync()
-    await bot.change_presence(activity=discord.Game(name="명령어 도움은 /도움말"))
-    monitor_system.start()
-    print(f'지금부터 서버 관리를 시작합니다! 봇 {bot.user}')
-    await asyncio.sleep(1800)  # 60초 대기 후 주가 변동 시작
-    update_stock_prices.start()  # 봇 시작 시 주식 업데이트 루프 실행
+        # 사용자 코인 관련 컬럼이 있는지 확인하는 함수 호출
+        ensure_check_in_net_coins_column()
+
+        # updates.json 파일의 무결성 검사
+        updates_file = 'updates.json'
+        if not validate_updates_json(updates_file):
+            print(f"업데이트 JSON 파일 ({updates_file})의 무결성 검사가 실패했습니다. 파일을 확인하세요.")
+            await bot.close()
+            return
+
+        # 명령어 동기화 시도 (예외 처리 추가)
+        synced = await bot.tree.sync()
+        print(f"명령어가 동기화되었습니다. 동기화된 명령어 개수: {len(synced)}개")
+
+        # 봇의 현재 상태 메시지 설정
+        await bot.change_presence(activity=discord.Game(name="명령어 도움은 /도움말"))
+
+        # 시스템 모니터링 시작
+        monitor_system.start()
+
+        print(f'지금부터 서버 관리를 시작합니다! 봇 {bot.user}')
+
+        # 주식 가격 업데이트 루프 실행 (봇 시작 후 30분 대기)
+        await asyncio.sleep(1800)
+        update_stock_prices.start()
+
+    except discord.errors.HTTPException as http_err:
+        print(f"HTTP 오류 발생: {http_err}")
+    except discord.errors.Forbidden as forbidden_err:
+        print(f"권한 오류 발생: {forbidden_err}")
+    except Exception as e:
+        print(f"명령어 동기화 중 알 수 없는 오류 발생: {e}")
 
 # 봇 실행
 bot.run(TOKEN)
