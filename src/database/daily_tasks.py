@@ -1,8 +1,12 @@
 import sqlite3
 from datetime import datetime
 from src.config.time_utils import get_korean_time
+from src.database.db import get_cursor, get_connection
 
-def update_daily_tasks(c: sqlite3.Cursor, conn: sqlite3.Connection, user_id: int, task_type: str):
+c = get_cursor()
+conn = get_connection()
+
+def update_daily_tasks(user_id: int, task_type: str):
     current_time = get_korean_time()
 
     # 기본적으로 유저 통계가 있는지 확인
