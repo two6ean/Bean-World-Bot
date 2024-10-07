@@ -34,7 +34,7 @@ from src.command.announcement import announcement
 from src.command.banned_word import banned_word
 from src.command.timeout import timeout
 from src.command.ban import ban
-from src.event.messge import handle_message
+from src.event.messge import handle_message, process_commands
 from src.command.event import event
 from src.command.attendance_check import attendance_check
 from src.command.attendance_raking import attendance_ranking
@@ -44,6 +44,10 @@ from src.command.blackjack import blackjack
 from src.command.help_slot import help_slot
 from src.command.odd_even import odd_even
 from src.command.update import update
+from src.command.manage_coins import manage_coins
+from src.command.my_coins import my_coins
+from src.command.coin_ranking import coin_ranking
+from src.command.rps import rps
 
 c = get_cursor()
 conn = get_connection()
@@ -64,403 +68,6 @@ youtube_dl.utils.bug_reports_message = lambda: ''
 async def on_message(message):    
     await handle_message(message, bot, c)
     await bot.process_commands(message)
-
-@bot.tree.command(name="코인관리", description="사용자에게 코인을 지급하거나 차감합니다.")
-@app_commands.choices(옵션=[
-    app_commands.Choice(name="지급", value="지급"),
-    app_commands.Choice(name="차감", value="차감")
-])
-@app_commands.describe(옵션="지급 또는 차감을 선택하세요.", 사용자="대상 사용자", 금액="금액을 입력하세요.")
-@app_commands.guild_only()
-async def manage_coins(interaction: discord.Interaction, 옵션: app_commands.Choice[str], 사용자: discord.Member, 금액: int):
-    try:
-        if ADMIN_ROLE_ID not in [role.id for role in interaction.user.roles]:
-            await interaction.response.send_message("이 명령어를 사용할 권한이 없습니다.", ephemeral=True)
-            return
-
-        if 금액 <= 0:
-            await interaction.response.send_message("금액은 0보다 커야 합니다.", ephemeral=True)
-            return
-
-        user_id = 사용자.id
-        current_coins = get_user_coins(user_id)
-
-        if 옵션.value == "지급":
-            new_coins = current_coins + 금액
-            action = "지급"
-        else:
-            if 금액 > current_coins:
-                await interaction.response.send_message("사용자의 코인이 부족합니다.", ephemeral=True)
-                return
-            new_coins = current_coins - 금액
-            action = "차감"
-
-        if current_coins == 0 and 옵션.value == "차감":
-            await interaction.response.send_message("사용자의 코인이 부족합니다.", ephemeral=True)
-            return
-        
-        update_user_coins(user_id, 금액 if 옵션.value == "지급" else -금액)
-
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title=f"코인 {action} 완료",
-                description=(
-                    f"{사용자.mention}님에게 {format_coins(금액)}개 🪙 코인을 {action}했습니다.\n"
-                    f"현재 {사용자.display_name}의 코인: {format_coins(new_coins)}개 🪙"
-                ),
-                color=discord.Color.green()
-            ),
-            ephemeral=True
-        )
-    except Exception as e:
-        await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
-        
-class MoneyMakingView(discord.ui.View):
-    def __init__(self, user_id, button_states=None, page=0, buttons_clicked=0):
-        super().__init__(timeout=300)  # 5분 타임아웃 설정
-        self.user_id = user_id
-        self.page = page
-        self.buttons_clicked = buttons_clicked
-        self.button_states = button_states if button_states else [False] * 20
-        self.buttons = []
-
-        start = page * 10
-        end = start + 10
-        for i in range(start, end):
-            button = discord.ui.Button(label="⬜", custom_id=f"work_{i+1}", style=discord.ButtonStyle.success if self.button_states[i] else discord.ButtonStyle.primary)
-            button.callback = self.on_button_click
-            button.disabled = self.button_states[i]
-            self.add_item(button)
-            self.buttons.append(button)
-
-        if page > 0:
-            prev_button = discord.ui.Button(label="이전", style=discord.ButtonStyle.secondary)
-            prev_button.callback = self.prev_page
-            self.add_item(prev_button)
-
-        if end < 20:
-            next_button = discord.ui.Button(label="다음", style=discord.ButtonStyle.secondary)
-            next_button.callback = self.next_page
-            self.add_item(next_button)
-
-    async def on_button_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("이 작업은 당신이 시작한 작업이 아닙니다.", ephemeral=True)
-            return
-
-        self.buttons_clicked += 1
-        button_index = int(interaction.data['custom_id'].split('_')[1]) - 1
-        self.button_states[button_index] = True
-        button = discord.utils.get(self.buttons, custom_id=interaction.data['custom_id'])
-        button.style = discord.ButtonStyle.success
-        button.disabled = True
-        await interaction.response.edit_message(view=self)
-
-        if self.buttons_clicked == 20:
-            update_user_coins(self.user_id, 20)
-            await interaction.edit_original_response(
-                embed=discord.Embed(
-                    title="노가다 완료!",
-                    description=f"20개의 버튼을 모두 클릭하여 20개의 코인을 획득했습니다! 현재 코인: {format_coins(get_user_coins(self.user_id))}개 🪙",
-                    color=discord.Color.green()
-                )
-            )
-            update_daily_tasks(self.user_id, "노가다")
-            bot.ongoing_tasks.remove(self.user_id)
-            self.stop()
-        else:
-            embed = discord.Embed(
-                title="노가다 작업",
-                description=f"{self.buttons_clicked}/20 버튼을 클릭했습니다.",
-                color=discord.Color.blue()
-            )
-            await interaction.edit_original_response(embed=embed, view=self)
-
-    async def prev_page(self, interaction: discord.Interaction):
-        self.page -= 1
-        await interaction.response.edit_message(view=MoneyMakingView(self.user_id, self.button_states, self.page, self.buttons_clicked))
-
-    async def next_page(self, interaction: discord.Interaction):
-        self.page += 1
-        await interaction.response.edit_message(view=MoneyMakingView(self.user_id, self.button_states, self.page, self.buttons_clicked))
-
-
-class ArithmeticProblemView(discord.ui.View):
-    def __init__(self, user_id, correct_answer):
-        super().__init__(timeout=300)  # 5분 타임아웃 설정
-        self.user_id = user_id
-        self.correct_answer = correct_answer
-
-        choices = [correct_answer, correct_answer + random.randint(1, 10), correct_answer - random.randint(1, 10), correct_answer + random.randint(11, 20)]
-        random.shuffle(choices)
-
-        for choice in choices:
-            button = discord.ui.Button(label=str(choice), custom_id=str(choice))
-            button.callback = self.on_button_click
-            self.add_item(button)
-
-    async def on_button_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("이 작업은 당신이 시작한 작업이 아닙니다.", ephemeral=True)
-            return
-
-        selected_answer = int(interaction.data['custom_id'])
-        if selected_answer == self.correct_answer:
-            update_user_coins(self.user_id, 10)
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="정답입니다!",
-                    description=f"10개의 코인을 획득했습니다! 현재 코인: {format_coins(get_user_coins(self.user_id))}개 🪙",
-                    color=discord.Color.green()
-                )
-            )
-            update_daily_tasks(self.user_id, "문제풀기")
-            bot.ongoing_tasks.remove(self.user_id)
-            self.stop()
-        else:
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="오답입니다!",
-                    description="다시 시도하세요!",
-                    color=discord.Color.red()
-                ),
-                ephemeral=True
-            )
-
-    async def on_timeout(self):
-        await self.message.edit(
-            embed=discord.Embed(
-                title="시간 초과",
-                description="시간이 초과되었습니다. 다시 시도해주세요.",
-                color=discord.Color.red()
-            ),
-            view=None
-        )
-        bot.ongoing_tasks.remove(self.user_id)
-
-bot.ongoing_tasks = set()
-
-def check_and_reset_daily_tasks(user_id):
-    current_time = get_korean_time()
-    reset = False
-
-    c.execute("SELECT last_reset, work_count, problem_count FROM daily_tasks WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-
-    if row:
-        last_reset, work_count, problem_count = row
-        last_reset_time = datetime.fromisoformat(last_reset).astimezone(KST)
-        if (current_time - last_reset_time).total_seconds() >= 86400: 
-            reset = True
-            work_count = 0
-            problem_count = 0
-            c.execute("UPDATE daily_tasks SET last_reset = ?, work_count = ?, problem_count = ? WHERE user_id = ?", (current_time.isoformat(), work_count, problem_count, user_id))
-            conn.commit()
-    else:
-        reset = True
-        work_count = 0
-        problem_count = 0
-        c.execute("INSERT INTO daily_tasks (user_id, last_reset, work_count, problem_count) VALUES (?, ?, ?, ?)", (user_id, current_time.isoformat(), work_count, problem_count))
-        conn.commit()
-
-    return reset, work_count, problem_count, current_time
-
-@bot.tree.command(name="돈벌기", description="노가다 또는 문제풀기를 선택하여 돈을 법니다.")
-@app_commands.choices(option=[
-    app_commands.Choice(name="노가다", value="노가다"),
-    app_commands.Choice(name="문제풀기", value="문제풀기")
-])
-@app_commands.guild_only()
-async def money_making_command(interaction: discord.Interaction, option: app_commands.Choice[str]):
-    try:
-        user_id = interaction.user.id
-        reset, work_count, problem_count, last_reset_time = check_and_reset_daily_tasks(user_id)
-        current_time = get_korean_time()
-
-        if option.value == "노가다":
-            if work_count >= 5:
-                time_diff = (current_time - last_reset_time).total_seconds()
-                time_remaining = 86400 - time_diff
-                hours, remainder = divmod(time_remaining, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        title="노가다 제한",
-                        description=f"오늘은 더 이상 노가다 작업을 할 수 없습니다. 내일 다시 시도하세요. 남은 시간: {int(hours)}시간 {int(minutes)}분 {int(seconds)}초",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-                return
-            if user_id in bot.ongoing_tasks:
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        title="진행 중인 작업",
-                        description="이미 진행 중인 노가다 작업이 있습니다.",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-                return
-            embed = discord.Embed(
-                title="노가다 작업",
-                description="20개의 버튼을 클릭하여 20개의 코인을 획득하세요!",
-                color=discord.Color.blue()
-            )
-            await interaction.response.send_message(embed=embed)
-            message = await interaction.original_response()
-            view = MoneyMakingView(user_id)
-            await message.edit(view=view)
-            bot.ongoing_tasks.add(user_id)
-        elif option.value == "문제풀기":
-            if problem_count >= 5:
-                time_diff = (current_time - last_reset_time).total_seconds()
-                time_remaining = 86400 - time_diff
-                hours, remainder = divmod(time_remaining, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        title="문제풀기 제한",
-                        description=f"오늘은 더 이상 문제풀기를 할 수 없습니다. 내일 다시 시도하세요. 남은 시간: {int(hours)}시간 {int(minutes)}분 {int(seconds)}초",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-                return
-            if user_id in bot.ongoing_tasks:
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        title="진행 중인 작업",
-                        description="이미 진행 중인 문제풀기 작업이 있습니다.",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-                return
-            num1 = random.randint(1, 50)
-            num2 = random.randint(1, 50)
-            operator = random.choice(['+', '-', '*', '/'])
-            if operator == '+':
-                correct_answer = num1 + num2
-            elif operator == '-':
-                correct_answer = num1 - num2
-            elif operator == '*':
-                correct_answer = num1 * num2
-            else:
-                num1 = num1 * num2
-                correct_answer = num1 // num2
-
-            problem_text = f"{num1} {operator} {num2} = ?"
-            view = ArithmeticProblemView(user_id, correct_answer)
-            embed = discord.Embed(
-                title="문제풀기",
-                description=f"다음 문제를 풀어주세요: `{problem_text}`",
-                color=discord.Color.blue()
-            )
-            await interaction.response.send_message(embed=embed, view=view)
-            bot.ongoing_tasks.add(user_id)
-        else:
-            await interaction.response.send_message("올바르지 않은 옵션입니다.", ephemeral=True)
-    except Exception as e:
-        if interaction.response.is_done():
-            await interaction.followup.send(f"오류 발생: {str(e)}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
-
-# 내코인 명령어
-@bot.tree.command(name="내코인", description="내가 가진 코인 수를 확인합니다.")
-@app_commands.guild_only()
-async def my_coins_command(interaction: discord.Interaction):
-    try:
-        user_id = interaction.user.id
-        coins = get_user_coins(user_id)
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="💰 내 코인",
-                description=f"현재 코인: {format_coins(coins)}개 🪙",  # format_coins() 함수로 통일
-                color=discord.Color.blue()
-            )
-        )
-    except Exception as e:
-        await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
-
-@bot.tree.command(name="코인랭킹", description="코인 랭킹을 표시합니다.")
-@app_commands.guild_only()
-async def coin_ranking_command(interaction: discord.Interaction):
-    try:
-        c.execute("SELECT user_id, coins FROM user_coins ORDER BY coins DESC LIMIT 10")
-        rankings = c.fetchall()
-
-        if rankings:
-            embed = discord.Embed(title="🏆 코인 랭킹", color=discord.Color.gold())
-            ranking_text = ""
-            rank_emojis = ["🥇", "🥈", "🥉"] + [f"🏅{i+4}" for i in range(7)]
-            for i, (user_id, coins) in enumerate(rankings):
-                user = await bot.fetch_user(user_id)
-                ranking_text += f"{rank_emojis[i]} **{user.name}**: {format_coins(coins)}개 🪙\n"
-            embed.add_field(name="TOP 10", value=ranking_text, inline=False)
-        else:
-            embed = discord.Embed(title="🏆 코인 랭킹", description="코인 기록이 없습니다.", color=discord.Color.gold())
-
-        await interaction.response.send_message(embed=embed)
-    except Exception as e:
-        await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
-
-@bot.tree.command(name="가위바위보", description="가위바위보 게임을 합니다.")
-@app_commands.describe(배팅="배팅할 코인 수", 선택="가위, 바위, 보 중 하나를 선택하세요")
-@app_commands.choices(선택=[
-    app_commands.Choice(name="가위", value="가위"),
-    app_commands.Choice(name="바위", value="바위"),
-    app_commands.Choice(name="보", value="보")
-])
-@app_commands.guild_only()
-async def rps_command(interaction: discord.Interaction, 배팅: int, 선택: app_commands.Choice[str]):
-    try:
-        user_id = interaction.user.id
-        current_coins = get_user_coins(user_id)
-        if 배팅 > current_coins:
-            await interaction.response.send_message("배팅할 코인이 부족합니다.", ephemeral=True)
-            return
-
-        user_choice = 선택.value
-        bot_choice = random.choice(["가위", "바위", "보"])
-        result = ""
-        net_coins = 0  # net_coins 변수를 초기화합니다.
-
-        # 배팅 금액을 먼저 차감합니다.
-        update_user_coins(user_id, -배팅)
-
-        if user_choice == bot_choice:
-            result = "무승부"
-            net_coins = 배팅  # 무승부 시 배팅 금액 반환
-            update_user_coins(user_id, 배팅)  # 반환 처리
-        elif (user_choice == "가위" and bot_choice == "보") or \
-            (user_choice == "바위" and bot_choice == "가위") or \
-            (user_choice == "보" and bot_choice == "바위"):
-            result = "승리"
-            net_coins = int(배팅 * 1.5)  # 승리 시 배팅 금액의 50% 추가
-            update_user_coins(user_id, net_coins)
-        else:
-            result = "패배"
-            net_coins = 0  # 패배 시 net_coins는 이미 차감되었으므로 0
-
-        update_rps_stats(user_id, result, 배팅)
-
-        color = discord.Color.green() if result == "승리" else discord.Color.red() if result == "패배" else discord.Color.orange()
-        embed = discord.Embed(
-            title="가위바위보 결과",
-            description=(
-                f"**{interaction.user.mention}님의 선택:** {user_choice}\n"
-                f"**봇의 선택:** {bot_choice}\n"
-                f"**결과:** {result}\n"
-                f"**변동 코인:** {net_coins - 배팅 if result == '승리' else net_coins} 🪙\n"
-                f"**현재 코인:** {get_user_coins(user_id)} 🪙"
-            ),
-            color=color
-        )
-        await interaction.response.send_message(embed=embed)
-    except Exception as e:
-        await interaction.response.send_message(f"오류 발생: {str(e)}", ephemeral=True)
 
 #주식 명령어
 class Stock:
@@ -624,7 +231,7 @@ def initialize_stocks_if_empty():
             Stock("제아 엔터테이먼트", 150),
             Stock("포인바게트", 100),
             Stock("빈이엇 게임즈", 900),
-            Stock("바보헬스", 150),
+            Stock("아트디자인", 150),
             Stock("로즈의 타로샵", 350),
             Stock("김뜨뺌의 스팸공장", 150),
             Stock("슬비헤어", 150),
@@ -1319,8 +926,13 @@ async def on_ready():
         attendance_check(bot)
         attendance_ranking(bot)
         blackjack_help(bot)
+        blackjack(bot)
         odd_even(bot)
         update(bot)
+        manage_coins(bot)
+        my_coins(bot)
+        coin_ranking(bot)
+        rps(bot)
 
         # 사용자 코인 관련 컬럼이 있는지 확인하는 함수 호출
         ensure_check_in_net_coins_column()
