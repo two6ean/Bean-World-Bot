@@ -1,3 +1,4 @@
+import random
 import discord
 from discord import ui, Embed, ButtonStyle
 from discord.ext import commands, tasks
@@ -55,7 +56,7 @@ def rps(bot):
                     f"**봇의 선택:** {bot_choice}\n"
                     f"**결과:** {result}\n"
                     f"**변동 코인:** {net_coins - 배팅 if result == '승리' else net_coins} 🪙\n"
-                    f"**현재 코인:** {get_user_coins(user_id)} 🪙"
+                    f"**현재 코인:** {format_coins(get_user_coins(user_id))}개 🪙"
                 ),
                 color=color
             )

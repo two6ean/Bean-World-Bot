@@ -4,6 +4,8 @@ from discord.ext import commands, tasks
 from discord import app_commands
 from src.config.coin_setup import format_coins
 from src.database.coin_management import get_user_coins, update_user_coins
+from src.config.config import ADMIN_ROLE_ID
+
 
 def manage_coins(bot):
     @bot.tree.command(name="코인관리", description="사용자에게 코인을 지급하거나 차감합니다.")

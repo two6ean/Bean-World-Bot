@@ -1,11 +1,23 @@
+import random
 import discord
 from discord import ui, Embed, ButtonStyle
 from discord.ext import commands, tasks
 from discord import app_commands
 from src.database.db import get_cursor, get_connection
+from src.database.coin_management import update_user_coins, get_user_coins
+from src.config.coin_setup import format_coins
+from src.database.daily_tasks import update_daily_tasks
+from datetime import datetime, timezone, timedelta
+from src.config.time_utils import get_korean_time
+from src.config.config import KST
 
 c = get_cursor()
 conn = get_connection()
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True  # 멤버 관련 이벤트를 처리하기 위해 활성화
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 class MoneyMakingView(discord.ui.View):
     def __init__(self, user_id, button_states=None, page=0, buttons_clicked=0):
