@@ -77,3 +77,22 @@ class UpdateButton(discord.ui.Button):
         else:
             view.current_page += 1
         await show_update_page(interaction, view.updates, view.current_page)
+        
+def validate_updates_json(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            updates = json.load(file)
+        
+        for update in updates:
+            if not all(key in update for key in ("version", "date", "details")):
+                return False
+            if not isinstance(update['version'], str):
+                return False
+            if not isinstance(update['date'], str):
+                return False
+            if not isinstance(update['details'], list) or not all(isinstance(detail, str) for detail in update['details']):
+                return False
+        
+        return True
+    except (json.JSONDecodeError, FileNotFoundError):
+        return False
