@@ -37,3 +37,4 @@ class Hangang:
                 'status': "error",
                 'msg': "API를 불러오는데 실패했습니다."
             }
+        

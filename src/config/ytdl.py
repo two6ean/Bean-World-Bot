@@ -1,5 +1,3 @@
-import yt_dlp as youtube_dl
-
 # yt-dlp 포맷 옵션 설정
 ytdl_format_options = {
     'format': 'bestaudio[ext=m4a]/bestaudio/best',
